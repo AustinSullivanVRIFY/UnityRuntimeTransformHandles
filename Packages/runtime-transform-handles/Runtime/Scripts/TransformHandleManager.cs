@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using TransformHandles.Utils;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
 namespace TransformHandles
@@ -13,7 +13,7 @@ namespace TransformHandles
     public class TransformHandleManager : Singleton<TransformHandleManager>
     {
         private const int MaxRaycastHits = 16;
-        private const float RaycastMaxDistance = 1000f;
+        private const float RaycastMaxDistance = Mathf.Infinity;
 
         /// <summary>The main camera used for raycasting.</summary>
         public Camera mainCamera;
@@ -36,7 +36,7 @@ namespace TransformHandles
 
         private RaycastHit[] _rayHits;
 
-        private Vector3 _previousMousePosition;
+        private Vector3 _previousPointerPosition;
         private Vector3 _handleHitPoint;
 
         private HandleBase _previousAxis;
@@ -193,6 +193,8 @@ namespace TransformHandles
             return ghost;
         }
 
+        public TransformGroup GetHandleTransformGroup(Handle handle) => _handleGroupMap.GetValueOrDefault(handle);
+
         /// <summary>
         /// Removes a handle from the manager.
         /// </summary>
@@ -332,8 +334,13 @@ namespace TransformHandles
 
             HandleOverEffect(_hoveredHandle);
 
+#if ENABLE_INPUT_SYSTEM
+            PointerInput();
+            // TODO: implement keyboard input for new input system
+#else
             MouseInput();
             KeyboardInput();
+#endif
         }
 
         protected virtual void GetHandle(ref HandleBase handle, ref Vector3 hitPoint)
@@ -343,7 +350,8 @@ namespace TransformHandles
             var size = 0;
             try
             {
-                var ray = mainCamera.ScreenPointToRay(Input.mousePosition);
+                var screenPosition = GetPointerScreenPosition();
+                var ray = mainCamera.ScreenPointToRay(screenPosition);
                 size = Physics.RaycastNonAlloc(ray, _rayHits, RaycastMaxDistance, layerMask);
             }
             catch (MissingReferenceException)
@@ -392,12 +400,39 @@ namespace TransformHandles
 
             _previousAxis = handleBase;
         }
+        
+        private void PointerInput()
+        {
+            if (Pointer.current == null) return;
+            
+            if (Pointer.current.press.isPressed && _draggingHandle != null)
+            {
+                _draggingHandle.Interact(_previousPointerPosition);
+                OnInteraction();
+            }
 
+            if (Pointer.current.press.wasPressedThisFrame && _hoveredHandle != null)
+            {
+                _draggingHandle = _hoveredHandle;
+                _draggingHandle.StartInteraction(_handleHitPoint);
+                OnInteractionStart();
+            }
+
+            if (Pointer.current.press.wasReleasedThisFrame && _draggingHandle != null)
+            {
+                _draggingHandle.EndInteraction();
+                _draggingHandle = null;
+                OnInteractionEnd();
+            }
+            
+            _previousPointerPosition = Pointer.current.position.ReadValue();
+        }
+        
         protected virtual void MouseInput()
         {
             if (Input.GetMouseButton(0) && _draggingHandle != null)
             {
-                _draggingHandle.Interact(_previousMousePosition);
+                _draggingHandle.Interact(_previousPointerPosition);
                 OnInteraction();
             }
 
@@ -415,7 +450,7 @@ namespace TransformHandles
                 OnInteractionEnd();
             }
 
-            _previousMousePosition = Input.mousePosition;
+            _previousPointerPosition = Input.mousePosition;
         }
 
         protected virtual void KeyboardInput()
@@ -572,6 +607,16 @@ namespace TransformHandles
             {
                 group.UpdateScales(scaleChange);
             }
+        }
+
+        public static Vector3 GetPointerScreenPosition()
+        {
+#if ENABLE_INPUT_SYSTEM
+            var screenPosition = Pointer.current.position.ReadValue();
+#else
+            screenPosition = Input.mousePosition;
+#endif
+            return screenPosition;
         }
     }
 }
