@@ -13,8 +13,11 @@ namespace TransformHandles
     public class TransformHandleManager : Singleton<TransformHandleManager>
     {
         private const int MaxRaycastHits = 16;
-        private const float RaycastMaxDistance = Mathf.Infinity;
-
+        private float raycastMaxDistance;
+        
+        private const float PixelSelectionRadius = 8f;
+        private const float MinimumSphereCastRadius = 0.1f;
+        
         /// <summary>The main camera used for raycasting.</summary>
         public Camera mainCamera;
 
@@ -24,7 +27,7 @@ namespace TransformHandles
 
         [Header("Settings")]
         [SerializeField] private LayerMask layerMask;
-        [SerializeField] private Color highlightColor = Color.white;
+        [SerializeField, ColorUsage(true, true)] private Color highlightColor = Color.white;
 
         [Header("Shortcuts")]
         [SerializeField] private KeyCode positionShortcut = KeyCode.W;
@@ -34,7 +37,7 @@ namespace TransformHandles
         [SerializeField] private KeyCode spaceShortcut = KeyCode.X;
         [SerializeField] private KeyCode pivotShortcut = KeyCode.Z;
 
-        private RaycastHit[] _rayHits;
+        private RaycastHit[] _rayHits = new RaycastHit[MaxRaycastHits];
 
         private Vector3 _previousPointerPosition;
         private Vector3 _handleHitPoint;
@@ -75,6 +78,7 @@ namespace TransformHandles
             if (_isInitialized) return;
 
             mainCamera = mainCamera == null ? Camera.main : mainCamera;
+            raycastMaxDistance = mainCamera?.farClipPlane ?? Mathf.Infinity;
 
             _handleGroupMap = new Dictionary<Handle, TransformGroup>();
             _ghostGroupMap = new Dictionary<Ghost, TransformGroup>();
@@ -327,7 +331,6 @@ namespace TransformHandles
         {
             if (!_handleActive) return;
 
-            _hoveredHandle = null;
             _handleHitPoint = Vector3.zero;
 
             GetHandle(ref _hoveredHandle, ref _handleHitPoint);
@@ -345,14 +348,23 @@ namespace TransformHandles
 
         protected virtual void GetHandle(ref HandleBase handle, ref Vector3 hitPoint)
         {
-            _rayHits = new RaycastHit[MaxRaycastHits];
-
             var size = 0;
             try
             {
                 var screenPosition = GetPointerScreenPosition();
                 var ray = mainCamera.ScreenPointToRay(screenPosition);
-                size = Physics.RaycastNonAlloc(ray, _rayHits, RaycastMaxDistance, layerMask);
+                var sphereCastRadius = 1f;
+                if(_hoveredHandle != null)
+                {
+                    var depth = Vector3.Dot(_hoveredHandle.transform.position - ray.origin, ray.direction);
+                    depth = Mathf.Max(depth, mainCamera.nearClipPlane);
+                
+                    var angle = (PixelSelectionRadius / mainCamera.pixelHeight) * (mainCamera.fieldOfView * Mathf.Deg2Rad);
+                    sphereCastRadius = depth * Mathf.Tan(angle);
+                    sphereCastRadius = Mathf.Max(sphereCastRadius, MinimumSphereCastRadius);
+                }
+                
+                size = Physics.SphereCastNonAlloc(ray, sphereCastRadius, _rayHits, raycastMaxDistance, layerMask);
             }
             catch (MissingReferenceException)
             {
@@ -367,15 +379,17 @@ namespace TransformHandles
                 }
             }
 
-            if (size == 0)
+            if(size == 0)
             {
+                handle = null;
                 return;
             }
-
+            
             Array.Sort(_rayHits, (x, y) => x.distance.CompareTo(y.distance));
 
-            foreach (var hit in _rayHits)
+            for(var i = 0; i < size; i++)
             {
+                var hit = _rayHits[i];
                 var hitCollider = hit.collider;
                 if (hitCollider == null) continue;
                 handle = hit.collider.gameObject.GetComponentInParent<HandleBase>();
